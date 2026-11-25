@@ -1477,6 +1477,40 @@ fun MainScreen(
                 }
             }
 
+            item {
+                SectionHeader(title = "Notification Island", icon = Icons.Default.Notifications)
+            }
+            item {
+                SettingsCardItem(position = GroupPosition.SINGLE, isActive = settings.groupIslandNotifications) {
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        headlineContent = { Text("Group notifications") },
+                        supportingContent = { Text("Keep one compact group; enable Incoming Notifications above. The group stays until dismissed.") },
+                        trailingContent = {
+                            Switch(checked = settings.groupIslandNotifications, onCheckedChange = { enabled ->
+                                viewModel.updateSettings { it.copy(groupIslandNotifications = enabled, showNotifications = if (enabled) true else it.showNotifications) }
+                            })
+                        }
+                    )
+                }
+            }
+            item {
+                SettingsCardItem(position = GroupPosition.SINGLE) {
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        headlineContent = { Text("Notification sources") },
+                        supportingContent = { Text("Select apps allowed in the island") },
+                        modifier = Modifier.clickable {
+                            viewModel.loadInstalledApps(context)
+                            showAppFilterSheet = true
+                        }
+                    )
+                }
+            }
+            item {
+                NotificationIconsOnlyControl()
+            }
+
             // SECTION 5B: SYSTEM ALERTS & INDICATORS (ALWAYS TOP PRIORITY)
             item {
                 SectionHeader(
@@ -1662,7 +1696,7 @@ fun MainScreen(
                             },
                             trailingContent = {
                                 Switch(
-                                    checked = !app.isBlocked,
+                                    checked = app.packageName !in settings.blockedPackages,
                                     onCheckedChange = {
                                         viewModel.toggleAppBlocked(app.packageName)
                                     }
@@ -2445,6 +2479,43 @@ fun getHorizontalSegmentShape(index: Int, total: Int, isSelected: Boolean): Roun
                 bottomEnd = outerRadius
             )
             else -> RoundedCornerShape(innerRadius)
+        }
+    }
+}
+
+@Composable
+private fun NotificationIconsOnlyControl() {
+    val context = LocalContext.current
+    val helper = com.droidbubble.app.util.ShizukuHelper
+    var busy by remember { mutableStateOf(false) }
+    fun applyHidden(hidden: Boolean) {
+        if (!helper.isShizukuAvailable()) {
+            Toast.makeText(context, "Start Shizuku first", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!helper.hasShizukuPermission()) {
+            helper.requestShizukuPermission()
+            Toast.makeText(context, "Allow Shizuku, then tap again", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (helper.isSystemStatusBarIconsHidden(context)) {
+            Toast.makeText(context, "Turn off the full status bar hiding option first", Toast.LENGTH_LONG).show()
+            return
+        }
+        busy = true
+        helper.setNotificationIconsOnlyHidden(hidden) { ok ->
+            busy = false
+            Toast.makeText(context, if (ok) "Command sent — check your status bar" else "Shizuku command failed", Toast.LENGTH_LONG).show()
+        }
+    }
+    SettingsCardItem(position = GroupPosition.SINGLE) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Text("System notification icons (experimental)", fontWeight = FontWeight.SemiBold)
+            Text("Hides all notification icons, not notifications. Other status bar tools may override this. Reapply after reboot if needed.", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { applyHidden(true) }, enabled = !busy) { Text("Hide icons") }
+                TextButton(onClick = { applyHidden(false) }, enabled = !busy) { Text("Restore icons") }
+            }
         }
     }
 }

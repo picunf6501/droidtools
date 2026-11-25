@@ -44,6 +44,7 @@ data class IslandSettings(
     val showCalls: Boolean = true,
     val showMedia: Boolean = true,
     val showNotifications: Boolean = false,
+    val groupIslandNotifications: Boolean = false,
     val showLiveProgress: Boolean = true,
     val showScreenRecording: Boolean = true,
     val showFlashlight: Boolean = true,

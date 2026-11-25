@@ -84,6 +84,47 @@ object IslandStateManager {
     private val _activeNotification = MutableStateFlow<NotificationInfo?>(null)
     val activeNotification: StateFlow<NotificationInfo?> = _activeNotification.asStateFlow()
 
+    // Optional grouped inbox, separate from media/progress/call state.
+    private val _notificationGroup = MutableStateFlow<List<NotificationInfo>>(emptyList())
+    val notificationGroup: StateFlow<List<NotificationInfo>> = _notificationGroup.asStateFlow()
+    private var groupMode = false
+    private val dismissedGroupKeys = mutableSetOf<String>()
+
+    fun setNotificationGroupMode(enabled: Boolean) {
+        if (groupMode == enabled) return
+        groupMode = enabled
+        dismissedGroupKeys.clear()
+        _notificationGroup.value = emptyList()
+        if (!enabled) updateNotification(null)
+    }
+
+    fun syncNotificationGroup(items: List<NotificationInfo>, postedKey: String? = null) {
+        if (!groupMode) return
+        dismissedGroupKeys.retainAll(items.map { it.key }.toSet())
+        if (postedKey != null) dismissedGroupKeys.remove(postedKey)
+        val visible = items.filterNot { it.key in dismissedGroupKeys }.distinctBy { it.key }
+            .sortedByDescending { it.timestamp }
+        _notificationGroup.value = visible
+        val selected = if (postedKey != null && !_isExpanded.value) visible.firstOrNull { it.key == postedKey } else null
+        val next = selected ?: visible.firstOrNull { it.key == _activeNotification.value?.key } ?: visible.firstOrNull()
+        autoDismissNotificationJob?.cancel()
+        if (next == null) {
+            if (_activeNotification.value != null) updateNotification(null)
+        } else {
+            _activeNotification.value = next
+            if (selected != null) triggerPopIn()
+        }
+    }
+
+    fun selectNextGroupedNotification() {
+        val list = _notificationGroup.value
+        if (list.size < 2) return
+        val index = list.indexOfFirst { it.key == _activeNotification.value?.key }
+        _activeNotification.value = list[(index + 1) % list.size]
+        setKeyboardFocused(false)
+    }
+
+
     private val _activeProgress = MutableStateFlow<NotificationInfo?>(null)
     val activeProgress: StateFlow<NotificationInfo?> = _activeProgress.asStateFlow()
 
@@ -521,6 +562,16 @@ object IslandStateManager {
     fun dismissCurrentNotification(): Boolean {
         autoDismissNotificationJob?.cancel()
         val notif = _activeNotification.value ?: return false
+        if (groupMode) {
+            dismissedGroupKeys.add(notif.key)
+            val remaining = _notificationGroup.value.filterNot { it.key == notif.key }
+            _notificationGroup.value = remaining
+            if (remaining.isNotEmpty()) {
+                _activeNotification.value = remaining.first()
+                _isPopInActive.value = false
+                return true
+            }
+        }
         // Dismiss card only, without cancelling actual system notification
         _activeNotification.value = null
         _isPopInActive.value = false

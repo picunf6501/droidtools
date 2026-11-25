@@ -54,6 +54,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -3445,6 +3446,59 @@ fun ParenthesisBracket(
     }
 }
 
+/** Keep the count attached to the app icon in both compact notification layouts. */
+@Composable
+private fun NotificationIconWithCount(
+    notification: NotificationInfo?,
+    count: Int,
+    isM3: Boolean,
+    iconSize: Dp,
+    tint: Color
+) {
+    val iconContent: @Composable (Dp) -> Unit = { size ->
+        if (notification?.iconBitmap != null) {
+            Image(
+                bitmap = notification.iconBitmap.asImageBitmap(),
+                contentDescription = "Notification Icon",
+                modifier = Modifier.size(size).clip(if (isM3) M3CookieShape else CircleShape)
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Default.Notifications,
+                contentDescription = "Notification Icon",
+                tint = tint,
+                modifier = Modifier.size(size)
+            )
+        }
+    }
+    if (count <= 1) {
+        iconContent(iconSize)
+        return
+    }
+    val label = if (count > 99) "99+" else count.toString()
+    BoxWithConstraints {
+        // In a very narrow pill, use a small corner badge instead of clipping a row.
+        val roomForRow = maxWidth >= (if (count >= 10) 36.dp else 28.dp)
+        if (roomForRow) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                iconContent(15.dp)
+                Text(text = label, color = tint, fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+            }
+        } else {
+            Box(modifier = Modifier.size(25.dp), contentAlignment = Alignment.CenterStart) {
+                iconContent(17.dp)
+                Text(text = label, color = tint, fontSize = 8.sp, lineHeight = 9.sp,
+                    fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false,
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .background(Color.Black, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 1.dp))
+            }
+        }
+    }
+}
+
 @Composable
 fun AuxiliaryBubbleContent(
     priority: IslandPriority?,
@@ -3459,6 +3513,7 @@ fun AuxiliaryBubbleContent(
     charging: IslandStateManager.ChargingInfo? = null,
     designLanguage: DesignLanguage = DesignLanguage.DROIDBUBBLE
 ) {
+    val groupedNotifications by IslandStateManager.notificationGroup.collectAsState()
     val isM3 = designLanguage == DesignLanguage.MATERIAL3
     val m3Primary = MaterialTheme.colorScheme.primary
     val m3SurfVariant = MaterialTheme.colorScheme.surfaceVariant
@@ -3476,23 +3531,15 @@ fun AuxiliaryBubbleContent(
             PulsingRecordingDot(dotColor = if (isM3) MaterialTheme.colorScheme.error else Color(0xFFFF3B30))
         }
         IslandPriority.POP_NOTIFICATION -> {
-            if (notification?.iconBitmap != null) {
-                Image(
-                    bitmap = notification.iconBitmap.asImageBitmap(),
-                    contentDescription = "Notification Icon",
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clip(if (isM3) M3CookieShape else CircleShape)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Notifications,
-                    contentDescription = null,
-                    tint = if (isM3) m3Primary else Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
+            NotificationIconWithCount(
+                notification = notification,
+                count = groupedNotifications.size,
+                isM3 = isM3,
+                iconSize = 18.dp,
+                tint = if (isM3) m3Primary else Color.White
+            )
         }
+
         IslandPriority.PROGRESS -> {
             val pct = notification?.progressFraction ?: 0f
             val isIndet = notification?.isIndeterminate == true
@@ -3654,6 +3701,7 @@ fun CompactContent(
     alarmInfo: IslandStateManager.AlarmInfo? = null,
     designLanguage: DesignLanguage = DesignLanguage.DROIDBUBBLE
 ) {
+    val groupedNotifications by IslandStateManager.notificationGroup.collectAsState()
     val isM3 = designLanguage == DesignLanguage.MATERIAL3
     val m3Primary = MaterialTheme.colorScheme.primary
     val m3OnSurface = MaterialTheme.colorScheme.onSurface
@@ -3722,22 +3770,13 @@ fun CompactContent(
             }
 
             IslandPriority.POP_NOTIFICATION -> {
-                if (notification?.iconBitmap != null) {
-                    Image(
-                        bitmap = notification.iconBitmap.asImageBitmap(),
-                        contentDescription = "Notification Icon",
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(if (isM3) M3CookieShape else CircleShape)
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.Notifications,
-                        contentDescription = null,
-                        tint = if (isM3) m3Primary else Color(0xFFE5E5EA),
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                NotificationIconWithCount(
+                    notification = notification,
+                    count = groupedNotifications.size,
+                    isM3 = isM3,
+                    iconSize = 20.dp,
+                    tint = if (isM3) m3Primary else Color.White
+                )
             }
 
             IslandPriority.PROGRESS -> {
@@ -5097,9 +5136,10 @@ fun ExpandedNotificationView(
     maxLines: Int = 2,
     designLanguage: DesignLanguage = DesignLanguage.DROIDBUBBLE
 ) {
+    val groupedNotifications by IslandStateManager.notificationGroup.collectAsState()
     val context = LocalContext.current
-    var isReplying by remember { mutableStateOf(false) }
-    var replyText by remember { mutableStateOf("") }
+    var isReplying by remember(notification?.key) { mutableStateOf(false) }
+    var replyText by remember(notification?.key) { mutableStateOf("") }
 
     val replyAction = remember(notification) {
         notification?.actions?.firstOrNull { it.isReply || it.title.contains("Reply", ignoreCase = true) }
@@ -5211,6 +5251,16 @@ fun ExpandedNotificationView(
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (groupedNotifications.size > 1) {
+                    Text(
+                        text = "${(groupedNotifications.indexOfFirst { it.key == notification?.key } + 1).coerceAtLeast(1)}/${groupedNotifications.size} ›",
+                        color = notifSubColor,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        modifier = Modifier.clickable { IslandStateManager.selectNextGroupedNotification() }.padding(8.dp)
                     )
                 }
 

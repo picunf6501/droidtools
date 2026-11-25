@@ -49,6 +49,7 @@ class NotificationReceiverService : NotificationListenerService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var settingsRepository: SettingsRepository
     private var currentSettings = IslandSettings()
+    private var listenerConnected = false
 
     private var mediaSessionManager: MediaSessionManager? = null
     private var activeMediaController: MediaController? = null
@@ -65,7 +66,15 @@ class NotificationReceiverService : NotificationListenerService() {
         settingsRepository = SettingsRepository(this)
         serviceScope.launch {
             settingsRepository.settingsFlow.collectLatest {
+                val old = currentSettings
                 currentSettings = it
+                IslandStateManager.setNotificationGroupMode(it.groupIslandNotifications && it.showNotifications)
+                if (old.groupIslandNotifications != it.groupIslandNotifications || old.showNotifications != it.showNotifications || old.blockedPackages != it.blockedPackages) {
+                    if (it.groupIslandNotifications && it.showNotifications) syncGroupedNotifications()
+                    else if (!it.showNotifications || IslandStateManager.activeNotification.value?.packageName?.let { pkg -> pkg in it.blockedPackages } == true) {
+                        IslandStateManager.updateNotification(null)
+                    }
+                }
                 IslandStateManager.dismissMediaOnPause = it.dismissMediaOnPause
                 refreshMedia()
             }
@@ -212,6 +221,7 @@ class NotificationReceiverService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        listenerConnected = true
         try {
             mediaSessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
             val componentName = ComponentName(this, NotificationReceiverService::class.java)
@@ -221,10 +231,13 @@ class NotificationReceiverService : NotificationListenerService() {
         } catch (e: Exception) {
             Log.e("NotificationReceiver", "Error registering media session listener", e)
         }
+        syncGroupedNotifications()
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
+        listenerConnected = false
+        IslandStateManager.syncNotificationGroup(emptyList())
         try {
             mediaSessionManager?.removeOnActiveSessionsChangedListener(sessionsChangedListener)
             for ((ctrl, cb) in controllerCallbacks) {
@@ -239,6 +252,8 @@ class NotificationReceiverService : NotificationListenerService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        listenerConnected = false
+        IslandStateManager.syncNotificationGroup(emptyList())
         if (instance === this) {
             instance = null
         }
@@ -906,6 +921,7 @@ class NotificationReceiverService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         if (sbn == null) return
+        syncGroupedNotifications(posted = sbn)
         val lightingCfg = com.droidbubble.app.tools.SystemToolsManager.getInstance(this).notificationLightingConfig.value
         if (!currentSettings.showNotifications && !currentSettings.showLiveProgress && !currentSettings.showScreenRecording && !currentSettings.showCalls && !lightingCfg.enabled) return
 
@@ -1024,6 +1040,21 @@ class NotificationReceiverService : NotificationListenerService() {
 
         if (!hasProgress && !currentSettings.showNotifications) return
 
+        val notifInfo = buildNotificationInfo(sbn, notification, appName, title, text, iconBitmap, progress, maxProgress, isIndeterminate || (isNavigation && maxProgress <= 0), isOngoing)
+
+        if (hasProgress) {
+            IslandStateManager.updateProgress(notifInfo)
+        } else {
+            if (!currentSettings.groupIslandNotifications) IslandStateManager.updateNotification(notifInfo)
+        }
+    }
+
+    private fun buildNotificationInfo(
+        sbn: StatusBarNotification, notification: Notification, appName: String,
+        title: String?, text: String?, iconBitmap: Bitmap?, progress: Int = -1,
+        maxProgress: Int = 0, isIndeterminate: Boolean = false, isOngoing: Boolean = false
+    ): NotificationInfo {
+        val packageName = sbn.packageName
         val actions = mutableListOf<NotificationAction>()
         notification.actions?.forEach { action ->
             if (action != null && !action.title.isNullOrBlank()) {
@@ -1041,7 +1072,7 @@ class NotificationReceiverService : NotificationListenerService() {
             }
         }
 
-        val notifInfo = NotificationInfo(
+        return NotificationInfo(
             key = sbn.key,
             packageName = packageName,
             appName = appName,
@@ -1053,15 +1084,31 @@ class NotificationReceiverService : NotificationListenerService() {
             timestamp = sbn.postTime,
             progress = progress,
             maxProgress = maxProgress,
-            isIndeterminate = isIndeterminate || (isNavigation && maxProgress <= 0),
+            isIndeterminate = isIndeterminate,
             isOngoing = isOngoing
         )
 
-        if (hasProgress) {
-            IslandStateManager.updateProgress(notifInfo)
-        } else {
-            IslandStateManager.updateNotification(notifInfo)
+    }
+
+    private fun syncGroupedNotifications(posted: StatusBarNotification? = null, removedKey: String? = null) {
+        if (!listenerConnected || !currentSettings.groupIslandNotifications || !currentSettings.showNotifications) return
+        val active = runCatching { activeNotifications?.toList() }.getOrNull() ?: return
+        val all = (active.filter { it.key != removedKey && it.key != posted?.key } + listOfNotNull(posted))
+        val items = all.mapNotNull { sbn ->
+            val n = sbn.notification ?: return@mapNotNull null
+            if (sbn.packageName == packageName || sbn.packageName in currentSettings.blockedPackages || sbn.isOngoing ||
+                (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_GROUP_SUMMARY)) != 0 ||
+                isMediaNotification(sbn, n) || isOngoingCallNotification(sbn, n) ||
+                isScreenRecordingNotification(sbn, n) || isScreenRecordingSavedNotification(sbn, n)) return@mapNotNull null
+            val e = n.extras ?: return@mapNotNull null
+            if (e.getInt(Notification.EXTRA_PROGRESS_MAX, 0) > 0 || e.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)) return@mapNotNull null
+            val title = e.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: e.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()
+            val text = e.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: e.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: e.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
+            if (title.isNullOrBlank() && text.isNullOrBlank()) return@mapNotNull null
+            val name = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() }.getOrDefault(sbn.packageName)
+            buildNotificationInfo(sbn, n, name, title, text, extractNotificationBitmap(n, sbn.packageName))
         }
+        IslandStateManager.syncNotificationGroup(items, posted?.key)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -1088,6 +1135,7 @@ class NotificationReceiverService : NotificationListenerService() {
         if (notifObj != null && (isMediaNotification(sbn, notifObj) || sbn.packageName == activeMediaController?.packageName)) {
             refreshMedia()
         }
+        syncGroupedNotifications(removedKey = sbn.key)
         IslandStateManager.removeNotification(sbn.key)
     }
 

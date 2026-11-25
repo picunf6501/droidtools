@@ -298,6 +298,16 @@ object ShizukuHelper {
         }
     }
 
+    // Only notification icons; leaves the clock, network, battery and shade alone on AOSP.
+    fun setNotificationIconsOnlyHidden(hidden: Boolean, onResult: (Boolean) -> Unit) {
+        executor.execute {
+            val success = isShizukuAvailable() && hasShizukuPermission() && runShellCommand(
+                "cmd statusbar send-disable-flag " + (if (hidden) "notification-icons" else "none")
+            )
+            mainHandler.post { onResult(success) }
+        }
+    }
+
     private fun runShellCommand(command: String): Boolean {
         return try {
             val method = Shizuku::class.java.getDeclaredMethod(
