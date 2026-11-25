@@ -615,14 +615,16 @@ fun IslandOverlayRoot(
     val activeCount = orderedActivePriorities.size
     val isDual = !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation && activeCount >= 2
     val isTriple = !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation && activeCount >= 3
-    val isCompactDual = isDual && settings.showDualActivityInCompact
+    val combinedMediaNotifications = settings.groupIslandNotifications && isMedia && isNotification && !isCall && !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation
+    val isCompactDual = isDual && settings.showDualActivityInCompact && !combinedMediaNotifications
     val speed = settings.animationSpeed.coerceIn(0.5f, 2.0f)
     val speedSq = speed * speed
 
-    val primaryPriority: IslandPriority = orderedActivePriorities.firstOrNull() ?: IslandPriority.IDLE
+    val primaryPriority: IslandPriority = if (combinedMediaNotifications) IslandPriority.MEDIA else orderedActivePriorities.firstOrNull() ?: IslandPriority.IDLE
 
     val secondaryPriority: IslandPriority? = when {
         !isDual -> null
+        combinedMediaNotifications -> IslandPriority.POP_NOTIFICATION
         isPopIn && isNotification && primaryPriority != IslandPriority.POP_NOTIFICATION -> IslandPriority.POP_NOTIFICATION
         orderedActivePriorities.size >= 2 -> orderedActivePriorities[1]
         else -> null
@@ -3058,6 +3060,7 @@ fun IslandOverlayRoot(
                                 weatherInfo = weatherInfo,
                                 networkSpeedInfo = networkSpeedInfo,
                                 secondaryPriority = compactSecondaryPriority,
+                                combinedMediaNotifications = combinedMediaNotifications,
                                 charging = charging,
                                 alarmInfo = alarmInfo,
                                 designLanguage = settings.designLanguage
@@ -3697,6 +3700,7 @@ fun CompactContent(
     weatherInfo: WeatherInfo = WeatherInfo(),
     networkSpeedInfo: NetworkSpeedInfo = NetworkSpeedInfo(),
     secondaryPriority: IslandPriority? = null,
+    combinedMediaNotifications: Boolean = false,
     charging: IslandStateManager.ChargingInfo? = null,
     alarmInfo: IslandStateManager.AlarmInfo? = null,
     designLanguage: DesignLanguage = DesignLanguage.DROIDBUBBLE
@@ -3946,7 +3950,19 @@ fun CompactContent(
                 } else {
                     defaultEqTint
                 }
-                EqualizerVisualizer(isPlaying = media?.isPlaying == true, barColor = compactEqTint)
+                if (combinedMediaNotifications) {
+                    Row(verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Box(Modifier.width(15.dp)) {
+                            EqualizerVisualizer(isPlaying = media?.isPlaying == true, barColor = compactEqTint)
+                        }
+                        Box(Modifier.clickable { IslandStateManager.expand(IslandPriority.POP_NOTIFICATION) }) {
+                            NotificationIconWithCount(notification, groupedNotifications.size, isM3, 16.dp, m3OnSurface)
+                        }
+                    }
+                } else {
+                    EqualizerVisualizer(isPlaying = media?.isPlaying == true, barColor = compactEqTint)
+                }
             }
 
             IslandPriority.FPS -> {
@@ -4069,13 +4085,16 @@ fun CompactContent(
             IslandPriority.ALARM -> 0.85f
             else -> 1f
         }
-        val rightWeight = when (priority) {
+        val rightWeight = when {
+            combinedMediaNotifications -> 1.8f
+            else -> when (priority) {
             IslandPriority.NETWORK_SPEED -> 1.25f
             IslandPriority.FPS -> 1.15f
             IslandPriority.CALL, IslandPriority.SCREEN_RECORDING -> 1.15f
             IslandPriority.WEATHER -> 1.10f
             IslandPriority.ALARM -> 1.15f
             else -> 1f
+        }
         }
         val startPadding = (when {
             priority == IslandPriority.CHARGING -> if (isCompactDual) 9.dp else 11.dp
