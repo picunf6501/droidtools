@@ -20,7 +20,6 @@ jobs:
       - name: Prepare Android SDK
         run: |
           SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          echo "Android SDK: $SDK"
 
           if [ ! -f "$SDK/platforms/android-36/android.jar" ] || [ ! -d "$SDK/build-tools/36.0.0" ]; then
             "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0"
@@ -32,7 +31,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build APK
-        run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
+        run: ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" :app:assembleDebug --stacktrace --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
