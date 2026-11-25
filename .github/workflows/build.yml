@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -17,14 +17,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK 36
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Prepare Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "Android SDK: $SDK"
+
+          if [ ! -f "$SDK/platforms/android-36/android.jar" ] || [ ! -d "$SDK/build-tools/36.0.0" ]; then
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0"
+          fi
+
+          echo "sdk.dir=$SDK" > local.properties
 
       - name: Grant permissions
         run: chmod +x gradlew
 
       - name: Build APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+        run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
