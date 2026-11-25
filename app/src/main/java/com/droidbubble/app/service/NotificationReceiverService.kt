@@ -29,6 +29,7 @@ import com.droidbubble.app.model.MediaInfo
 import com.droidbubble.app.model.NotificationAction
 import com.droidbubble.app.model.NotificationInfo
 import com.droidbubble.app.model.ScreenRecordingState
+import com.droidbubble.app.model.isTelegramPackage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +51,7 @@ class NotificationReceiverService : NotificationListenerService() {
     private lateinit var settingsRepository: SettingsRepository
     private var currentSettings = IslandSettings()
     private var listenerConnected = false
+    private var notificationSyncJob: Job? = null
 
     private var mediaSessionManager: MediaSessionManager? = null
     private var activeMediaController: MediaController? = null
@@ -71,7 +73,7 @@ class NotificationReceiverService : NotificationListenerService() {
                 IslandStateManager.setNotificationGroupMode(it.groupIslandNotifications && it.showNotifications)
                 if (old.groupIslandNotifications != it.groupIslandNotifications || old.showNotifications != it.showNotifications || old.blockedPackages != it.blockedPackages) {
                     if (it.groupIslandNotifications && it.showNotifications) syncGroupedNotifications()
-                    else if (!it.showNotifications || IslandStateManager.activeNotification.value?.packageName?.let { pkg -> pkg in it.blockedPackages } == true) {
+                    else if (!it.showNotifications || IslandStateManager.activeNotification.value?.packageName?.let { pkg -> !isTelegramPackage(pkg) } == true) {
                         IslandStateManager.updateNotification(null)
                     }
                 }
@@ -223,11 +225,15 @@ class NotificationReceiverService : NotificationListenerService() {
     internal fun statusBarIconCandidates(): List<StatusBarNotification>? {
         if (!listenerConnected) return null
         val active = runCatching { activeNotifications?.toList() }.getOrNull() ?: return null
-        return active.filter { sbn ->
+        val candidates = active.filter { sbn ->
             val n = sbn.notification
             sbn.packageName != packageName && n.smallIcon != null &&
-                !isMediaNotification(sbn, n) &&
-                (n.flags and Notification.FLAG_GROUP_SUMMARY) == 0
+                !isMediaNotification(sbn, n)
+        }
+        return candidates.filterNot { sbn ->
+            isGroupSummary(sbn) && candidates.any { child ->
+                child.packageName == sbn.packageName && child.groupKey == sbn.groupKey && !isGroupSummary(child)
+            }
         }.sortedByDescending { it.postTime }.distinctBy { it.packageName }
     }
 
@@ -244,11 +250,20 @@ class NotificationReceiverService : NotificationListenerService() {
             Log.e("NotificationReceiver", "Error registering media session listener", e)
         }
         syncGroupedNotifications()
+        notificationSyncJob?.cancel()
+        notificationSyncJob = serviceScope.launch {
+            while (isActive && listenerConnected) {
+                delay(4000L)
+                syncGroupedNotifications()
+            }
+        }
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         listenerConnected = false
+        notificationSyncJob?.cancel()
+        notificationSyncJob = null
         IslandStateManager.syncNotificationGroup(emptyList())
         try {
             mediaSessionManager?.removeOnActiveSessionsChangedListener(sessionsChangedListener)
@@ -265,6 +280,8 @@ class NotificationReceiverService : NotificationListenerService() {
     override fun onDestroy() {
         super.onDestroy()
         listenerConnected = false
+        notificationSyncJob?.cancel()
+        notificationSyncJob = null
         IslandStateManager.syncNotificationGroup(emptyList())
         if (instance === this) {
             instance = null
@@ -939,7 +956,7 @@ class NotificationReceiverService : NotificationListenerService() {
 
         val packageName = sbn.packageName
         if (packageName == this.packageName) return // Ignore self
-        if (currentSettings.blockedPackages.contains(packageName)) return
+        if (currentSettings.blockedPackages.contains(packageName) && !isTelegramPackage(packageName)) return
 
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
@@ -1050,7 +1067,8 @@ class NotificationReceiverService : NotificationListenerService() {
             )
         }
 
-        if (!hasProgress && !currentSettings.showNotifications) return
+        // Ordinary island notifications are Telegram-only; other system features stay independent.
+        if (!hasProgress && (!currentSettings.showNotifications || !isTelegramPackage(packageName))) return
 
         val notifInfo = buildNotificationInfo(sbn, notification, appName, title, text, iconBitmap, progress, maxProgress, isIndeterminate || (isNavigation && maxProgress <= 0), isOngoing)
 
@@ -1102,23 +1120,45 @@ class NotificationReceiverService : NotificationListenerService() {
 
     }
 
+    private fun isGroupSummary(sbn: StatusBarNotification): Boolean =
+        (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+
     private fun syncGroupedNotifications(posted: StatusBarNotification? = null, removedKey: String? = null) {
         if (!listenerConnected || !currentSettings.groupIslandNotifications || !currentSettings.showNotifications) return
         val active = runCatching { activeNotifications?.toList() }.getOrNull() ?: return
-        val all = (active.filter { it.key != removedKey && it.key != posted?.key } + listOfNotNull(posted))
-        val items = all.mapNotNull { sbn ->
-            val n = sbn.notification ?: return@mapNotNull null
-            if (sbn.packageName == packageName || sbn.packageName in currentSettings.blockedPackages || sbn.isOngoing ||
-                (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_GROUP_SUMMARY)) != 0 ||
-                isMediaNotification(sbn, n) || isOngoingCallNotification(sbn, n) ||
-                isScreenRecordingNotification(sbn, n) || isScreenRecordingSavedNotification(sbn, n)) return@mapNotNull null
-            val e = n.extras ?: return@mapNotNull null
-            if (e.getInt(Notification.EXTRA_PROGRESS_MAX, 0) > 0 || e.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false)) return@mapNotNull null
-            val title = e.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: e.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()
-            val text = e.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: e.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: e.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
-            if (title.isNullOrBlank() && text.isNullOrBlank()) return@mapNotNull null
+        val all = active.filter { it.key != removedKey && it.key != posted?.key } + listOfNotNull(posted)
+        val eligible = all.filter { sbn ->
+            val n = sbn.notification
+            val e = n.extras
+            // Telegram-only inbox: independent of the general per-app filter.
+            isTelegramPackage(sbn.packageName) &&
+                !sbn.isOngoing && (n.flags and Notification.FLAG_ONGOING_EVENT) == 0 &&
+                !isMediaNotification(sbn, n) && !isOngoingCallNotification(sbn, n) &&
+                !isScreenRecordingNotification(sbn, n) && !isScreenRecordingSavedNotification(sbn, n) &&
+                (e?.getInt(Notification.EXTRA_PROGRESS_MAX, 0) ?: 0) <= 0 &&
+                e?.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false) != true
+        }
+        val items = eligible.filterNot { sbn ->
+            // A summary is useful if Android does not expose its child notifications.
+            isGroupSummary(sbn) && eligible.any { child ->
+                child.packageName == sbn.packageName && child.groupKey == sbn.groupKey && !isGroupSummary(child)
+            }
+        }.map { sbn ->
+            val n = sbn.notification
+            val e = n.extras
+            val title = e?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+                ?: e?.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()
+            val lines = runCatching { e?.getCharSequenceArray(Notification.EXTRA_TEXT_LINES) }.getOrNull()
+            val text = e?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+                ?: e?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+                ?: e?.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
+                ?: lines?.joinToString("\n")
             val name = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() }.getOrDefault(sbn.packageName)
-            buildNotificationInfo(sbn, n, name, title, text, extractNotificationBitmap(n, sbn.packageName))
+            // Use the app icon rather than the conversation avatar in the compact pill.
+            val icon = getAppIconBitmap(sbn.packageName) ?: runCatching { extractNotificationBitmap(n, sbn.packageName) }.getOrNull()
+            val messages = runCatching { e?.getParcelableArray(Notification.EXTRA_MESSAGES)?.size ?: 0 }.getOrDefault(0)
+            val count = maxOf(1, n.number, messages, if (isGroupSummary(sbn)) lines?.size ?: 0 else 0)
+            buildNotificationInfo(sbn, n, name, title, text, icon).copy(notificationCount = count)
         }
         IslandStateManager.syncNotificationGroup(items, posted?.key)
     }
@@ -1277,26 +1317,8 @@ class NotificationReceiverService : NotificationListenerService() {
             }
         }
 
-        // 3. Sender is currently active media controller
-        if (sbn.packageName == activeMediaController?.packageName) return true
-        try {
-            val componentName = ComponentName(this, NotificationReceiverService::class.java)
-            val activeSessions = mediaSessionManager?.getActiveSessions(componentName)
-            if (activeSessions?.any { it.packageName == sbn.packageName } == true) return true
-        } catch (_: Exception) {}
-
-        // 4. Playback actions present (e.g. Previous, Next, Play, Pause)
-        notification.actions?.forEach { action ->
-            val actionTitle = action?.title?.toString()?.lowercase(java.util.Locale.ROOT) ?: ""
-            if (actionTitle.contains("pause") || actionTitle.contains("play") ||
-                actionTitle.contains("skip") || actionTitle.contains("previous") ||
-                actionTitle.contains("next") || actionTitle.contains("rewind") ||
-                actionTitle.contains("fast forward")
-            ) {
-                return true
-            }
-        }
-
+        // An active media session belongs to an app, not to every notification from it.
+        // In particular Telegram can play audio while also receiving normal messages.
         return false
     }
 }

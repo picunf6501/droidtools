@@ -206,6 +206,7 @@ import com.droidbubble.app.model.IslandSettings
 import com.droidbubble.app.model.DesignLanguage
 import com.droidbubble.app.model.MediaInfo
 import com.droidbubble.app.model.NotificationInfo
+import com.droidbubble.app.model.isTelegramPackage
 import com.droidbubble.app.model.ScreenRecordingState
 import java.util.Locale
 import kotlin.math.PI
@@ -528,7 +529,9 @@ fun IslandOverlayRoot(
     val currentLyrics by LyricsManager.currentLyrics.collectAsState()
     val hasAvailableLyrics = settings.showMediaLyrics && currentLyrics.isNotEmpty()
     val persistentNotifications by IslandStateManager.notificationGroup.collectAsState()
-    val currentNotif = notification ?: persistentNotifications.firstOrNull()
+    val currentNotif = (if (!isExpanded) persistentNotifications.firstOrNull { isTelegramPackage(it.packageName) } else null)
+        ?: notification?.takeIf { isTelegramPackage(it.packageName) }
+        ?: persistentNotifications.firstOrNull { isTelegramPackage(it.packageName) }
     val currentProgress = progressNotification
     val mediaArt = currentMedia?.albumArt ?: currentMedia?.appIcon
     val mediaAccentColor = remember(mediaArt) { extractMediaAccentColor(mediaArt) }
@@ -3451,6 +3454,13 @@ fun ParenthesisBracket(
     }
 }
 
+/** Count only notifications belonging to the app whose icon is displayed. */
+private fun appNotificationCount(notification: NotificationInfo?, group: List<NotificationInfo>): Int {
+    if (notification == null) return 0
+    return group.filter { it.packageName == notification.packageName }
+        .sumOf { it.notificationCount }.takeIf { it > 0 } ?: notification.notificationCount
+}
+
 /** Keep the count attached to the app icon in both compact notification layouts. */
 @Composable
 private fun NotificationIconWithCount(
@@ -3538,7 +3548,7 @@ fun AuxiliaryBubbleContent(
         IslandPriority.POP_NOTIFICATION -> {
             NotificationIconWithCount(
                 notification = notification,
-                count = groupedNotifications.size,
+                count = appNotificationCount(notification, groupedNotifications),
                 isM3 = isM3,
                 iconSize = 18.dp,
                 tint = if (isM3) m3Primary else Color.White
@@ -3778,7 +3788,7 @@ fun CompactContent(
             IslandPriority.POP_NOTIFICATION -> {
                 NotificationIconWithCount(
                     notification = notification,
-                    count = groupedNotifications.size,
+                    count = appNotificationCount(notification, groupedNotifications),
                     isM3 = isM3,
                     iconSize = 20.dp,
                     tint = if (isM3) m3Primary else Color.White
@@ -3956,7 +3966,7 @@ fun CompactContent(
                     Row(verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         Box(Modifier.clickable { IslandStateManager.expand(IslandPriority.POP_NOTIFICATION) }) {
-                            NotificationIconWithCount(notification, groupedNotifications.size, isM3, 16.dp, m3OnSurface)
+                            NotificationIconWithCount(notification, appNotificationCount(notification, groupedNotifications), isM3, 16.dp, m3OnSurface)
                         }
                     }
                 } else {

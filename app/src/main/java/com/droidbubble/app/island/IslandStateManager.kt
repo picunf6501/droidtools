@@ -4,6 +4,7 @@ import com.droidbubble.app.model.ActiveCallState
 import com.droidbubble.app.model.IslandPriority
 import com.droidbubble.app.model.MediaInfo
 import com.droidbubble.app.model.NotificationInfo
+import com.droidbubble.app.model.isTelegramPackage
 import com.droidbubble.app.model.ScreenRecordingState
 import com.droidbubble.app.model.FpsInfo
 import com.droidbubble.app.model.WeatherInfo
@@ -102,17 +103,19 @@ object IslandStateManager {
         if (!groupMode) return
         dismissedGroupKeys.retainAll(items.map { it.key }.toSet())
         if (postedKey != null) dismissedGroupKeys.remove(postedKey)
-        val visible = items.filterNot { it.key in dismissedGroupKeys }.distinctBy { it.key }
+        val visible = items.filter { isTelegramPackage(it.packageName) && it.key !in dismissedGroupKeys }.distinctBy { it.key }
             .sortedByDescending { it.timestamp }
         _notificationGroup.value = visible
         val selected = if (postedKey != null && !_isExpanded.value) visible.firstOrNull { it.key == postedKey } else null
-        val next = selected ?: visible.firstOrNull { it.key == _activeNotification.value?.key } ?: visible.firstOrNull()
+        // Keep Telegram visible in the collapsed pill; expanded cards still cycle all apps.
+        val telegram = if (!_isExpanded.value) visible.firstOrNull { isTelegramPackage(it.packageName) } else null
+        val next = telegram ?: selected ?: visible.firstOrNull { it.key == _activeNotification.value?.key } ?: visible.firstOrNull()
         autoDismissNotificationJob?.cancel()
         if (next == null) {
             if (_activeNotification.value != null) updateNotification(null)
         } else {
             _activeNotification.value = next
-            if (selected != null) triggerPopIn()
+            if (selected != null && selected.key == next.key) triggerPopIn()
         }
     }
 
@@ -495,6 +498,7 @@ object IslandStateManager {
             updateProgress(notification)
             return
         }
+        if (notification != null && !isTelegramPackage(notification.packageName)) return
         autoDismissNotificationJob?.cancel()
         _activeNotification.value = notification
         if (notification == null) {

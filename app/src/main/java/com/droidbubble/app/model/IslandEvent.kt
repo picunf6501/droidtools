@@ -38,6 +38,11 @@ data class NotificationAction(
     val isReply: Boolean get() = remoteInputKey != null
 }
 
+fun isTelegramPackage(packageName: String): Boolean =
+    packageName == "org.telegram.messenger" ||
+        packageName.startsWith("org.telegram.messenger.") ||
+        packageName == "org.thunderdog.challegram"
+
 data class NotificationInfo(
     val key: String,
     val packageName: String,
@@ -51,7 +56,8 @@ data class NotificationInfo(
     val progress: Int = -1,
     val maxProgress: Int = 0,
     val isIndeterminate: Boolean = false,
-    val isOngoing: Boolean = false
+    val isOngoing: Boolean = false,
+    val notificationCount: Int = 1
 ) {
     val hasProgress: Boolean
         get() = maxProgress > 0 || isIndeterminate || (progress >= 0 && maxProgress > 0)
