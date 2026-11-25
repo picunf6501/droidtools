@@ -2487,34 +2487,49 @@ fun getHorizontalSegmentShape(index: Int, total: Int, isSelected: Boolean): Roun
 private fun NotificationIconsOnlyControl() {
     val context = LocalContext.current
     val helper = com.droidbubble.app.util.ShizukuHelper
+    val mode = com.droidbubble.app.service.TwoIconStatusBar.Companion
+    var enabled by remember { mutableStateOf(mode.enabled(context)) }
     var busy by remember { mutableStateOf(false) }
-    fun applyHidden(hidden: Boolean) {
-        if (!helper.isShizukuAvailable()) {
-            Toast.makeText(context, "Start Shizuku first", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!helper.hasShizukuPermission()) {
-            helper.requestShizukuPermission()
-            Toast.makeText(context, "Allow Shizuku, then tap again", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (helper.isSystemStatusBarIconsHidden(context)) {
-            Toast.makeText(context, "Turn off the full status bar hiding option first", Toast.LENGTH_LONG).show()
-            return
-        }
-        busy = true
-        helper.setNotificationIconsOnlyHidden(hidden) { ok ->
-            busy = false
-            Toast.makeText(context, if (ok) "Command sent — check your status bar" else "Shizuku command failed", Toast.LENGTH_LONG).show()
+    fun changeMode(next: Boolean) {
+        if (next) {
+            if (!helper.isShizukuAvailable()) {
+                Toast.makeText(context, "Start Shizuku first", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (!helper.hasShizukuPermission()) {
+                helper.requestShizukuPermission()
+                Toast.makeText(context, "Allow Shizuku, then tap again", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (helper.isSystemStatusBarIconsHidden(context)) {
+                Toast.makeText(context, "Turn off full status bar hiding first", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (com.droidbubble.app.service.IslandAccessibilityService.instance == null ||
+                com.droidbubble.app.service.NotificationReceiverService.instance == null) {
+                Toast.makeText(context, "Enable Accessibility and Notification access first", Toast.LENGTH_LONG).show()
+                return
+            }
+            mode.setEnabled(context, true)
+            enabled = true
+            Toast.makeText(context, "Experimental mode enabled — check the status bar", Toast.LENGTH_LONG).show()
+        } else {
+            mode.setEnabled(context, false)
+            enabled = false
+            busy = true
+            mode.restore(context) { ok ->
+                busy = false
+                Toast.makeText(context, if (ok) "Restore command sent" else "Restore failed — check Shizuku and try again", Toast.LENGTH_LONG).show()
+            }
         }
     }
     SettingsCardItem(position = GroupPosition.SINGLE) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Text("System notification icons (experimental)", fontWeight = FontWeight.SemiBold)
-            Text("Hides all notification icons, not notifications. Other status bar tools may override this. Reapply after reboot if needed.", style = MaterialTheme.typography.bodySmall)
+            Text("Max 2 notification icons (experimental)", fontWeight = FontWeight.SemiBold)
+            Text("Replaces the native notification icon strip with up to two recent app icons while Droidbubble runs. Notifications remain in the shade. Nothing OS may ignore the hide command.", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { applyHidden(true) }, enabled = !busy) { Text("Hide icons") }
-                TextButton(onClick = { applyHidden(false) }, enabled = !busy) { Text("Restore icons") }
+                TextButton(onClick = { changeMode(true) }, enabled = !busy && !enabled) { Text("Max 2 icons") }
+                TextButton(onClick = { changeMode(false) }, enabled = !busy) { Text("Restore icons") }
             }
         }
     }

@@ -108,6 +108,7 @@ class IslandOverlayService : Service() {
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var twoIconStatusBar: TwoIconStatusBar? = null
     private lateinit var settingsRepository: SettingsRepository
     private var windowManager: WindowManager? = null
     private var composeView: ComposeView? = null
@@ -635,6 +636,14 @@ class IslandOverlayService : Service() {
         lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+
+        twoIconStatusBar = TwoIconStatusBar(this)
+        serviceScope.launch {
+            while (isActive) {
+                twoIconStatusBar?.refresh(currentSettings, composeView?.isAttachedToWindow == true)
+                delay(900L)
+            }
+        }
 
         createNotificationChannel()
         initCameraTorch()
@@ -1329,6 +1338,8 @@ class IslandOverlayService : Service() {
     }
 
 override fun onDestroy() {
+        twoIconStatusBar?.close()
+        twoIconStatusBar = null
         removeDroidbar()
         removePixelGridOverlay()
         removeLightingOverlay()

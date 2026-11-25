@@ -219,6 +219,18 @@ class NotificationReceiverService : NotificationListenerService() {
         }
     }
 
+    // Independent of the island app filter; never modifies or dismisses notifications.
+    internal fun statusBarIconCandidates(): List<StatusBarNotification>? {
+        if (!listenerConnected) return null
+        val active = runCatching { activeNotifications?.toList() }.getOrNull() ?: return null
+        return active.filter { sbn ->
+            val n = sbn.notification
+            sbn.packageName != packageName && n.smallIcon != null &&
+                !isMediaNotification(sbn, n) &&
+                (n.flags and Notification.FLAG_GROUP_SUMMARY) == 0
+        }.sortedByDescending { it.postTime }.distinctBy { it.packageName }
+    }
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         listenerConnected = true
