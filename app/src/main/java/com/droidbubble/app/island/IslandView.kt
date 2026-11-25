@@ -527,7 +527,8 @@ fun IslandOverlayRoot(
     val currentMedia = media
     val currentLyrics by LyricsManager.currentLyrics.collectAsState()
     val hasAvailableLyrics = settings.showMediaLyrics && currentLyrics.isNotEmpty()
-    val currentNotif = notification
+    val persistentNotifications by IslandStateManager.notificationGroup.collectAsState()
+    val currentNotif = notification ?: persistentNotifications.firstOrNull()
     val currentProgress = progressNotification
     val mediaArt = currentMedia?.albumArt ?: currentMedia?.appIcon
     val mediaAccentColor = remember(mediaArt) { extractMediaAccentColor(mediaArt) }
@@ -615,7 +616,7 @@ fun IslandOverlayRoot(
     val activeCount = orderedActivePriorities.size
     val isDual = !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation && activeCount >= 2
     val isTriple = !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation && activeCount >= 3
-    val combinedMediaNotifications = settings.groupIslandNotifications && isMedia && isNotification && !isCall && !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation
+    val combinedMediaNotifications = isMedia && isNotification && !isCall && !isCharging && !isUnlock && !isBluetooth && !isRingerMode && !isAirplaneMode && !isClipboard && !isTaskConfirmation
     val isCompactDual = isDual && settings.showDualActivityInCompact && !combinedMediaNotifications
     val speed = settings.animationSpeed.coerceIn(0.5f, 2.0f)
     val speedSq = speed * speed
@@ -1153,6 +1154,7 @@ fun IslandOverlayRoot(
     val targetCompactWidth = when {
         !isOccupied && !settings.alwaysShowPill && !hasPersistent -> 0.dp
         isExpanded -> 0.dp // Shrinks horizontally into 0 width while card expands!
+        combinedMediaNotifications -> settings.widthDp.dp.coerceAtLeast(112.dp) + (teardropEarRadius * 2f)
         isCharging || (!isCompactDual && primaryPriority == IslandPriority.CHARGING) -> chargingIslandWidth
         isTaskConfirmation -> taskConfirmationIslandWidth
         isRingerMode -> ringerIslandWidth
@@ -3952,10 +3954,7 @@ fun CompactContent(
                 }
                 if (combinedMediaNotifications) {
                     Row(verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Box(Modifier.width(15.dp)) {
-                            EqualizerVisualizer(isPlaying = media?.isPlaying == true, barColor = compactEqTint)
-                        }
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         Box(Modifier.clickable { IslandStateManager.expand(IslandPriority.POP_NOTIFICATION) }) {
                             NotificationIconWithCount(notification, groupedNotifications.size, isM3, 16.dp, m3OnSurface)
                         }
@@ -4086,7 +4085,7 @@ fun CompactContent(
             else -> 1f
         }
         val rightWeight = when {
-            combinedMediaNotifications -> 1.8f
+            combinedMediaNotifications -> 1f
             else -> when (priority) {
             IslandPriority.NETWORK_SPEED -> 1.25f
             IslandPriority.FPS -> 1.15f
@@ -4104,7 +4103,7 @@ fun CompactContent(
         val endPadding = (if (isCompactDual) 10.dp else 8.dp) + teardropEarInset
         val centerSpacerWidth = when {
             isCompactDual -> 20.dp
-            priority == IslandPriority.MEDIA -> 20.dp
+            priority == IslandPriority.MEDIA -> 24.dp
             else -> 24.dp
         }
         Row(
