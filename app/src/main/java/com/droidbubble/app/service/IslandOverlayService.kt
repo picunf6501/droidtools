@@ -391,7 +391,6 @@ class IslandOverlayService : Service() {
             }
             if (action == Intent.ACTION_USER_PRESENT) {
                 IslandStateManager.setDeviceLocked(false)
-                IslandStateManager.triggerUnlockEvent()
                 fireDeviceEventAutomations(com.droidbubble.app.tasks.DeviceEventType.SCREEN_UNLOCKED)
                 return
             }
@@ -406,7 +405,6 @@ class IslandOverlayService : Service() {
                 val locked = km?.isKeyguardLocked == true
                 IslandStateManager.setDeviceLocked(locked)
                 if (km != null && !locked) {
-                    IslandStateManager.triggerUnlockEvent()
                     fireDeviceEventAutomations(com.droidbubble.app.tasks.DeviceEventType.SCREEN_UNLOCKED)
                 }
                 return
