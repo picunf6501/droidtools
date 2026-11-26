@@ -1088,7 +1088,7 @@ class IslandOverlayService : Service() {
             val isTaskConfirmation = IslandStateManager.isTaskConfirmationActive
             val isOccupied = (currentSettings.showCalls && IslandStateManager.isCallActive) ||
                     (currentSettings.showMedia && IslandStateManager.isMediaActive) ||
-                    (currentSettings.showNotifications && IslandStateManager.isNotificationActive) ||
+                    ((currentSettings.showNotifications || currentSettings.groupIslandNotifications) && IslandStateManager.isNotificationActive) ||
                     (currentSettings.showLiveProgress && IslandStateManager.isProgressActive) ||
                     (currentSettings.showScreenRecording && IslandStateManager.isRecordingActive) ||
                     isFlashlight ||

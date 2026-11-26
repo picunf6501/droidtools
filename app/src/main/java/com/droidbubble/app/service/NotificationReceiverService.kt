@@ -52,6 +52,7 @@ class NotificationReceiverService : NotificationListenerService() {
     private var currentSettings = IslandSettings()
     private var listenerConnected = false
     private var notificationSyncJob: Job? = null
+    private val lastTelegramSnapshot = linkedMapOf<String, StatusBarNotification>()
 
     private var mediaSessionManager: MediaSessionManager? = null
     private var activeMediaController: MediaController? = null
@@ -70,12 +71,12 @@ class NotificationReceiverService : NotificationListenerService() {
             settingsRepository.settingsFlow.collectLatest {
                 val old = currentSettings
                 currentSettings = it
-                IslandStateManager.setNotificationGroupMode(it.groupIslandNotifications && it.showNotifications)
-                if (old.groupIslandNotifications != it.groupIslandNotifications || old.showNotifications != it.showNotifications || old.blockedPackages != it.blockedPackages) {
-                    if (it.groupIslandNotifications && it.showNotifications) syncGroupedNotifications()
-                    else if (!it.showNotifications || IslandStateManager.activeNotification.value?.packageName?.let { pkg -> !isTelegramPackage(pkg) } == true) {
-                        IslandStateManager.updateNotification(null)
-                    }
+                // The persistent Telegram inbox is controlled by Group notifications alone.
+                IslandStateManager.setNotificationGroupMode(it.groupIslandNotifications)
+                if (it.groupIslandNotifications) {
+                    syncGroupedNotifications()
+                } else if (!it.showNotifications || old.groupIslandNotifications) {
+                    IslandStateManager.updateNotification(null)
                 }
                 IslandStateManager.dismissMediaOnPause = it.dismissMediaOnPause
                 refreshMedia()
@@ -240,6 +241,7 @@ class NotificationReceiverService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         listenerConnected = true
+        syncGroupedNotifications()
         try {
             mediaSessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
             val componentName = ComponentName(this, NotificationReceiverService::class.java)
@@ -262,6 +264,7 @@ class NotificationReceiverService : NotificationListenerService() {
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         listenerConnected = false
+        lastTelegramSnapshot.clear()
         notificationSyncJob?.cancel()
         notificationSyncJob = null
         IslandStateManager.syncNotificationGroup(emptyList())
@@ -280,6 +283,7 @@ class NotificationReceiverService : NotificationListenerService() {
     override fun onDestroy() {
         super.onDestroy()
         listenerConnected = false
+        lastTelegramSnapshot.clear()
         notificationSyncJob?.cancel()
         notificationSyncJob = null
         IslandStateManager.syncNotificationGroup(emptyList())
@@ -1124,26 +1128,36 @@ class NotificationReceiverService : NotificationListenerService() {
         (sbn.notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
 
     private fun syncGroupedNotifications(posted: StatusBarNotification? = null, removedKey: String? = null) {
-        if (!listenerConnected || !currentSettings.groupIslandNotifications || !currentSettings.showNotifications) return
-        val active = runCatching { activeNotifications?.toList() }.getOrNull() ?: return
-        val all = active.filter { it.key != removedKey && it.key != posted?.key } + listOfNotNull(posted)
-        val eligible = all.filter { sbn ->
+        if (!currentSettings.groupIslandNotifications) return
+        if (!listenerConnected && posted == null && removedKey == null) return
+        // Keep event data if Android temporarily fails to return an active snapshot.
+        // A successful snapshot remains authoritative, including an empty list.
+        val active = runCatching { activeNotifications?.toList() }.getOrNull()
+        if (active != null) {
+            lastTelegramSnapshot.clear()
+            active.filter { isTelegramPackage(it.packageName) }.forEach { lastTelegramSnapshot[it.key] = it }
+        }
+        if (removedKey != null) lastTelegramSnapshot.remove(removedKey)
+        if (posted != null && isTelegramPackage(posted.packageName)) lastTelegramSnapshot[posted.key] = posted
+        val eligible = lastTelegramSnapshot.values.filter { sbn ->
             val n = sbn.notification
             val e = n.extras
-            // Telegram-only inbox: independent of the general per-app filter.
-            isTelegramPackage(sbn.packageName) &&
-                !sbn.isOngoing && (n.flags and Notification.FLAG_ONGOING_EVENT) == 0 &&
-                !isMediaNotification(sbn, n) && !isOngoingCallNotification(sbn, n) &&
-                !isScreenRecordingNotification(sbn, n) && !isScreenRecordingSavedNotification(sbn, n) &&
-                (e?.getInt(Notification.EXTRA_PROGRESS_MAX, 0) ?: 0) <= 0 &&
-                e?.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false) != true
+            val message = n.category == Notification.CATEGORY_MESSAGE ||
+                e?.getString(Notification.EXTRA_TEMPLATE)?.contains("MessagingStyle") == true
+            // Do not classify chat text as a recording, download or media event.
+            !isMediaNotification(sbn, n) && n.category != Notification.CATEGORY_CALL &&
+                !isOngoingCallNotification(sbn, n) &&
+                (message || (!sbn.isOngoing && (n.flags and Notification.FLAG_ONGOING_EVENT) == 0 &&
+                    (e?.getInt(Notification.EXTRA_PROGRESS_MAX, 0) ?: 0) <= 0 &&
+                    e?.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE, false) != true))
         }
         val items = eligible.filterNot { sbn ->
             // A summary is useful if Android does not expose its child notifications.
             isGroupSummary(sbn) && eligible.any { child ->
                 child.packageName == sbn.packageName && child.groupKey == sbn.groupKey && !isGroupSummary(child)
             }
-        }.map { sbn ->
+        }.mapNotNull { sbn ->
+            runCatching {
             val n = sbn.notification
             val e = n.extras
             val title = e?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
@@ -1159,8 +1173,10 @@ class NotificationReceiverService : NotificationListenerService() {
             val messages = runCatching { e?.getParcelableArray(Notification.EXTRA_MESSAGES)?.size ?: 0 }.getOrDefault(0)
             val count = maxOf(1, n.number, messages, if (isGroupSummary(sbn)) lines?.size ?: 0 else 0)
             buildNotificationInfo(sbn, n, name, title, text, icon).copy(notificationCount = count)
+            }.onFailure { Log.w("NotificationReceiver", "Telegram notification conversion failed", it) }.getOrNull()
         }
-        IslandStateManager.syncNotificationGroup(items, posted?.key)
+        Log.d("NotificationReceiver", "Telegram inbox: snapshot=${lastTelegramSnapshot.size}, eligible=${eligible.size}, visible=${items.size}")
+        IslandStateManager.syncNotificationGroup(items, posted?.takeIf { isTelegramPackage(it.packageName) }?.key)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -1187,8 +1203,8 @@ class NotificationReceiverService : NotificationListenerService() {
         if (notifObj != null && (isMediaNotification(sbn, notifObj) || sbn.packageName == activeMediaController?.packageName)) {
             refreshMedia()
         }
-        syncGroupedNotifications(removedKey = sbn.key)
         IslandStateManager.removeNotification(sbn.key)
+        syncGroupedNotifications(removedKey = sbn.key)
     }
 
     fun cancelMatchingNotifications(targetQuery: String, removeAll: Boolean) {

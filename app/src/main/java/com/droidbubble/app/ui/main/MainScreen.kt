@@ -1485,7 +1485,7 @@ fun MainScreen(
                     ListItem(
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         headlineContent = { Text("Group notifications") },
-                        supportingContent = { Text("Keep one compact group; enable Incoming Notifications above. The group stays until dismissed.") },
+                        supportingContent = { Text("Keep Telegram notifications in the island until dismissed, even without music or Incoming Notifications.") },
                         trailingContent = {
                             Switch(checked = settings.groupIslandNotifications, onCheckedChange = { enabled ->
                                 viewModel.updateSettings { it.copy(groupIslandNotifications = enabled, showNotifications = if (enabled) true else it.showNotifications) }

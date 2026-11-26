@@ -545,7 +545,7 @@ fun IslandOverlayRoot(
     val isCall = allowInOrientation && activeCall.isActive && settings.showCalls
     val isRecording = allowInOrientation && recording.isRecording && settings.showScreenRecording
     val isProgress = allowInOrientation && currentProgress != null && settings.showLiveProgress
-    val isNotification = allowInOrientation && currentNotif != null && settings.showNotifications
+    val isNotification = allowInOrientation && currentNotif != null && (settings.showNotifications || settings.groupIslandNotifications)
     val isMedia = allowInOrientation && currentMedia != null && (!settings.dismissMediaOnPause || currentMedia.isPlaying) && (currentMedia.isPlaying || currentMedia.title.isNotBlank()) && settings.showMedia
     val isFlashlight = allowInOrientation && settings.showFlashlight && isFlashlightOn
     val isPersistentCharging = allowInOrientation && isPersistentChargingActive
